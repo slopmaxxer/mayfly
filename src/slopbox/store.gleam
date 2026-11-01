@@ -15,6 +15,10 @@ pub const max_file = 209_715_200
 
 pub const max_storage = 10_737_418_240
 
+pub const max_active = 4
+
+pub const max_active_per_ip = 2
+
 pub type Entry {
   Entry(id: String, name: String, expires: Int, delete_hash: String, size: Int)
 }
@@ -24,13 +28,13 @@ pub type State {
     dir: String,
     entries: Dict(String, Entry),
     rates: Dict(String, List(Int)),
-    active: Int,
+    active: Dict(String, Int),
   )
 }
 
 pub type Message {
   Begin(ip: String, reply: Subject(Result(Nil, Int)))
-  End
+  End(ip: String)
   Publish(
     path: String,
     name: String,
@@ -145,7 +149,7 @@ pub fn load(dir: String) -> State {
       False -> Nil
     }
   })
-  cleanup(State(dir, entries, dict.new(), 0))
+  cleanup(State(dir, entries, dict.new(), dict.new()))
 }
 
 pub fn start(dir: String) -> Subject(Message) {
@@ -158,6 +162,10 @@ pub fn used(state: State) -> Int {
   dict.values(state.entries) |> list.fold(0, fn(total, e) { total + e.size })
 }
 
+pub fn active_count(state: State) -> Int {
+  dict.values(state.active) |> int.sum
+}
+
 fn handle(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
     Begin(ip, reply) -> {
@@ -165,12 +173,15 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       let recent = dict.get(state.rates, ip) |> result.unwrap([])
       let recent_count = list.length(recent)
       let rate_count = dict.size(state.rates)
+      let active = active_count(state)
+      let active_for_ip = dict.get(state.active, ip) |> result.unwrap(0)
       let answer = case Nil {
-        _ if state.active >= 4 -> Error(503)
+        _ if active >= max_active -> Error(503)
+        _ if active_for_ip >= max_active_per_ip -> Error(429)
         _ if recent_count >= 20 -> Error(429)
         _ if rate_count >= 10_000 -> Error(503)
         _ ->
-          case used(state) + { state.active + 1 } * max_file > max_storage {
+          case used(state) + { active + 1 } * max_file > max_storage {
             True -> Error(507)
             False -> Ok(Nil)
           }
@@ -181,14 +192,20 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
           actor.continue(
             State(
               ..state,
-              active: state.active + 1,
+              active: dict.insert(state.active, ip, active_for_ip + 1),
               rates: dict.insert(state.rates, ip, [now(), ..recent]),
             ),
           )
         Error(_) -> actor.continue(state)
       }
     }
-    End -> actor.continue(State(..state, active: int.max(0, state.active - 1)))
+    End(ip) -> {
+      let active = case dict.get(state.active, ip) {
+        Ok(n) if n > 1 -> dict.insert(state.active, ip, n - 1)
+        _ -> dict.delete(state.active, ip)
+      }
+      actor.continue(State(..state, active: active))
+    }
     Publish(path, name, hours, secret, reply) -> {
       let saved = publish(state, path, name, hours, secret)
       process.send(reply, saved)

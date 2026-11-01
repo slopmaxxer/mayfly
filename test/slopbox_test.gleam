@@ -82,13 +82,15 @@ pub fn expiry_and_orphan_test() {
 pub fn limits_test() {
   let dir = "/tmp/mayfly-test-" <> store.token()
   let state = store.start(dir)
-  process.call(state, 5000, store.Begin("ip", _)) |> should.equal(Ok(Nil))
-  process.call(state, 5000, store.Begin("ip", _)) |> should.equal(Ok(Nil))
-  process.call(state, 5000, store.Begin("ip", _)) |> should.equal(Ok(Nil))
-  process.call(state, 5000, store.Begin("ip", _)) |> should.equal(Ok(Nil))
-  process.call(state, 5000, store.Begin("ip", _)) |> should.equal(Error(503))
-  process.send(state, store.End)
-  process.call(state, 5000, store.Begin("ip", _)) |> should.equal(Ok(Nil))
+  process.call(state, 5000, store.Begin("a", _)) |> should.equal(Ok(Nil))
+  process.call(state, 5000, store.Begin("a", _)) |> should.equal(Ok(Nil))
+  // One client cannot take every upload slot.
+  process.call(state, 5000, store.Begin("a", _)) |> should.equal(Error(429))
+  process.call(state, 5000, store.Begin("b", _)) |> should.equal(Ok(Nil))
+  process.call(state, 5000, store.Begin("c", _)) |> should.equal(Ok(Nil))
+  process.call(state, 5000, store.Begin("d", _)) |> should.equal(Error(503))
+  process.send(state, store.End("a"))
+  process.call(state, 5000, store.Begin("d", _)) |> should.equal(Ok(Nil))
   let full =
     store.State(
       dir,
@@ -99,7 +101,7 @@ pub fn limits_test() {
         ),
       ]),
       dict.new(),
-      0,
+      dict.new(),
     )
   store.used(full) |> should.equal(store.max_storage)
   let _ = simplifile.delete(dir)

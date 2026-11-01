@@ -45,7 +45,8 @@ sessionStorage excludes the previous variant on each reload; no personal data.
 
 ## Live service (slopbox.freifick.net)
 - Limits: anonymous streamed uploads up to 200 MiB, expiry 1/12/24/72 hours, 20 attempts/hour/IP,
-  four concurrent uploads, 10 GiB quota including reservations; rate state resets at restart. No URL
+  four concurrent uploads (two per IP, each aborted after 15 minutes by a watchdog that kills the
+  connection process and removes its staged files), 10 GiB quota including reservations; rate state resets at restart. No URL
   imports. JSON API `/api/upload`; Litterbox-style plain URL API `/resources/internals/api.php`.
   The landing page's `#mayfly` card repeats these limits; keep it in sync.
 - `mayfly.service`: user `mayfly`, StateDirectory `/var/lib/mayfly` (0700), PrivateTmp, MemoryMax 1G;

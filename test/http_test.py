@@ -41,7 +41,8 @@ def upload(fields=None, content=b'hello from the temporary internet', path='/api
 
 with tempfile.TemporaryDirectory(prefix='mayfly-http-', dir=os.environ.get('MAYFLY_TEST_TMPDIR')) as directory:
     logfile = open(Path(directory) / 'server.log', 'w+')
-    env = dict(os.environ, MAYFLY_DATA=directory, MAYFLY_URL=BASE, MAYFLY_PORT=str(PORT), ERL_FLAGS='+S 2:2')
+    env = dict(os.environ, MAYFLY_DATA=directory, MAYFLY_URL=BASE, MAYFLY_PORT=str(PORT),
+               MAYFLY_UPLOAD_TIMEOUT='10', ERL_FLAGS='+S 2:2')
     server = None
 
     def stop():
@@ -121,6 +122,35 @@ with tempfile.TemporaryDirectory(prefix='mayfly-http-', dir=os.environ.get('MAYF
             status, body, _ = upload(ip='rate-test')
             assert status == 200, (status, body)
         assert upload(ip='rate-test')[0] == 429
+        # Stalled bodies hold upload slots only until the deadline.
+        def stall(ip):
+            conn = http.client.HTTPConnection('127.0.0.1', PORT, timeout=30)
+            conn.putrequest('POST', '/api/upload')
+            conn.putheader('Content-Type', 'multipart/form-data; boundary=stall')
+            conn.putheader('Content-Length', '1000000')
+            conn.putheader('X-Real-IP', ip)
+            conn.endheaders()
+            conn.send(b'--stall\r\nContent-Disposition: form-data; name="fileToUpload"; filename="s"\r\n\r\nx')
+            return conn
+        stalled = [stall('slow-a'), stall('slow-a')]
+        time.sleep(.5)
+        assert upload(ip='slow-a')[0] == 429
+        stalled += [stall('slow-b'), stall('slow-c')]
+        time.sleep(.5)
+        assert upload(ip='other')[0] == 503
+        time.sleep(10)
+        status, body, _ = upload(ip='other')
+        assert status == 200, (status, body)
+        for conn in stalled:
+            try:
+                conn.send(b'x')
+                conn.getresponse()
+                raise AssertionError('stalled upload survived its deadline')
+            except (OSError, http.client.HTTPException):
+                pass
+            conn.close()
+        leftovers = [p for p in (Path(directory) / 'tmp').rglob('*') if p.is_file()]
+        assert not leftovers, ('killed uploads must not leave staged files', leftovers)
         # Stream an oversized upload without allocating a huge request in RAM.
         boundary = 'oversize-test'
         prefix = f'--{boundary}\r\nContent-Disposition: form-data; name="fileToUpload"; filename="big.bin"\r\n\r\n'.encode()

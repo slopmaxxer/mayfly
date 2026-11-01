@@ -19,6 +19,10 @@ pub fn main() {
   let base = envoy.get("MAYFLY_URL") |> result.unwrap("http://127.0.0.1:8791")
   let port =
     envoy.get("MAYFLY_PORT") |> result.try(int.parse) |> result.unwrap(8791)
+  let deadline =
+    envoy.get("MAYFLY_UPLOAD_TIMEOUT")
+    |> result.try(int.parse)
+    |> result.unwrap(900)
   // Wisp must stage files on the data filesystem so publication can rename
   // atomically (the host's /tmp may be tmpfs or another mount).
   let staging = dir <> "/tmp"
@@ -33,7 +37,7 @@ pub fn main() {
   let _ = process.spawn(fn() { cleaner(state) })
   let secret = wisp.random_string(64)
   let assert Ok(_) =
-    fn(req) { handle(req, state, dir, base) }
+    fn(req) { handle(req, state, dir, base, deadline * 1000) }
     |> wisp_mist.handler(secret)
     |> mist.new
     |> mist.bind("127.0.0.1")
@@ -53,10 +57,11 @@ pub fn handle(
   state: process.Subject(store.Message),
   dir: String,
   base: String,
+  deadline: Int,
 ) -> wisp.Response {
   use <- wisp.rescue_crashes
   use req <- wisp.handle_head(req)
-  route(req, state, dir, base)
+  route(req, state, dir, base, deadline)
   |> wisp.set_header("x-content-type-options", "nosniff")
   |> wisp.set_header("referrer-policy", "no-referrer")
   |> wisp.set_header("cache-control", "no-store")
@@ -75,10 +80,11 @@ fn route(
   state: process.Subject(store.Message),
   dir: String,
   base: String,
+  deadline: Int,
 ) -> wisp.Response {
   case wisp.path_segments(req) {
     ["api", "upload"] | ["resources", "internals", "api.php"] ->
-      upload(req, state, base)
+      upload(req, state, base, deadline)
     ["f", id] -> {
       use <- wisp.require_method(req, http.Get)
       case store.valid_id(id) {
@@ -182,6 +188,7 @@ fn upload(
   req: wisp.Request,
   state: process.Subject(store.Message),
   base: String,
+  deadline: Int,
 ) -> wisp.Response {
   use <- wisp.require_method(req, http.Post)
   case request.get_header(req, "origin") {
@@ -196,7 +203,8 @@ fn upload(
           |> wisp.string_body("Upload limit reached; try later")
           |> wisp.set_header("retry-after", "3600")
         Ok(_) -> {
-          use <- exception.defer(fn() { process.send(state, store.End) })
+          let done = guard_upload(req, state, ip, deadline)
+          use <- exception.defer(fn() { process.send(done, Nil) })
           let req =
             req
             |> wisp.set_max_files_size(store.max_file)
@@ -250,6 +258,40 @@ fn upload(
       }
     }
   }
+}
+
+/// Releases the upload reservation once the handler finishes or dies. Mist's
+/// read timeout restarts with every chunk, so a client trickling its body
+/// could otherwise hold a slot indefinitely: at the deadline the connection
+/// process is killed and its staged files are removed.
+fn guard_upload(
+  req: wisp.Request,
+  state: process.Subject(store.Message),
+  ip: String,
+  deadline: Int,
+) -> process.Subject(Nil) {
+  let handler = process.self()
+  let ready = process.new_subject()
+  process.spawn_unlinked(fn() {
+    let done = process.new_subject()
+    process.send(ready, done)
+    let finished =
+      process.new_selector()
+      |> process.select(done)
+      |> process.select_specific_monitor(process.monitor(handler), fn(_) { Nil })
+    case process.selector_receive(finished, deadline) {
+      Ok(_) -> Nil
+      Error(_) -> {
+        process.kill(handler)
+        let _ = process.selector_receive(finished, 5000)
+        let _ = wisp.delete_temporary_files(req)
+        Nil
+      }
+    }
+    process.send(state, store.End(ip))
+  })
+  let assert Ok(done) = process.receive(ready, 5000)
+  done
 }
 
 pub fn validate_form(

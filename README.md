@@ -23,8 +23,10 @@ retain their legacy names so upgrades preserve existing uploads and links.
 - A custom hood-and-box SVG logo, matching favicon, compact upload panel,
   starfield, beveled window and subtle transparent anime mascots.
 - Service/API notes stay in collapsed details; artwork sits outside the upload controls.
-- Persistent disk metadata, 10 GiB storage quota, four simultaneous uploads,
-  20 upload attempts/hour/IP. Requests with an Origin must match MAYFLY_URL.
+- Persistent disk metadata, 10 GiB storage quota, four simultaneous uploads
+  (two per IP), 20 upload attempts/hour/IP. An upload that has not finished
+  after 15 minutes is aborted so a slow client cannot hold a slot.
+  Requests with an Origin must match MAYFLY_URL.
 
 Not affiliated with Catbox. This is an alternative implementation, not a complete
 clone: one file/request, no URL imports, no accounts or permanent storage.
@@ -48,6 +50,7 @@ Visit http://127.0.0.1:8791. Configuration:
 | MAYFLY_DATA | `./data` | Persistent data/metadata directory |
 | MAYFLY_URL | `http://127.0.0.1:8791` | Canonical external origin; no trailing slash |
 | MAYFLY_PORT | `8791` | Port; always binds 127.0.0.1 |
+| MAYFLY_UPLOAD_TIMEOUT | `900` | Seconds an upload request may take before it is aborted |
 
 The app trusts `X-Real-IP` only because it binds loopback. Your reverse proxy MUST
 overwrite it with the direct client IP, as the included Caddy config does. Do not
