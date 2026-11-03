@@ -20,7 +20,7 @@ sessionStorage excludes the previous variant on each reload; no personal data.
 - Deploy committed source with `./deploy.sh`; shipped BEAM at `/opt/mayfly/current`,
   service `mayfly`, loopback 8791, data `/var/lib/mayfly`. Uploads have no backups.
 - Update README and this file when behavior or operations change.
-- Signed commits, public MIT repo https://github.com/slopinger/mayfly (`git push origin main`),
+- Signed commits, public MIT repo https://github.com/slopmaxxer/mayfly (`git push origin main`),
   never commit uploads/secrets.
 
 - Gleam package: `slopbox`. Repo path, service/user/data paths and
